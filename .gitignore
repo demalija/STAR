@@ -7,3 +7,4 @@ data/
 npm-debug.log*
 playwright-report/
 test-results/
+!.env.example

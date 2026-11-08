@@ -1,0 +1,110 @@
+name: App checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run typecheck
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      database:
+        image: postgres:16
+        env:
+          POSTGRES_USER: asteria_ci
+          POSTGRES_DB: asteria_ci
+          POSTGRES_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}-ephemeral-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U asteria_ci -d asteria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://asteria_ci:${{ github.run_id }}-${{ github.run_attempt }}-ephemeral-test@127.0.0.1:5432/asteria_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx tsx --test tests/postgres.integration.test.ts
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Create isolated test owner and storage
+        shell: bash
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import { randomBytes } from 'node:crypto';
+          import { writeFileSync, mkdtempSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { hashPassword } from './lib/auth.ts';
+          const email = 'ci-owner@example.test';
+          const password = randomBytes(32).toString('base64url');
+          const secret = randomBytes(48).toString('base64url');
+          const directory = mkdtempSync(join(tmpdir(), 'asteria-ci-data-'));
+          writeFileSync('/tmp/asteria-ci-auth.json', JSON.stringify({email,password}), {mode:0o600});
+          writeFileSync('.env.local', [
+            `ADMIN_EMAIL=${email}`, `ADMIN_PASSWORD_HASH=${await hashPassword(password)}`,
+            `AUTH_SECRET=${secret}`, 'APP_URL=http://127.0.0.1:3000', `STAR_DATA_DIR=${directory}`,
+          ].join('\n')+'\n', {mode:0o600});
+          JS
+      - run: npm run build
+      - name: Run production browser tests
+        shell: bash
+        env:
+          E2E_AUTH_FILE: /tmp/asteria-ci-auth.json
+          E2E_BASE_URL: http://127.0.0.1:3000
+        run: |
+          set -euo pipefail
+          npm start > /tmp/asteria-ci-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:3000/api/admin/auth/session > /dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat /tmp/asteria-ci-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3000/api/admin/auth/session > /dev/null
+          export CHROMIUM_PATH="$(node -e 'process.stdout.write(require("playwright").chromium.executablePath())')"
+          npx playwright test
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-evidence
+          path: test-results/
+          retention-days: 7

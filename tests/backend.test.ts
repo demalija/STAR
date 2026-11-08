@@ -19,7 +19,7 @@ test('dedications persist across reads and keep email private', async () => {
   assert.equal(star.starName, 'Our forever light');
   assert.equal('email' in star, false);
   assert.match(star.id, /^[0-9a-f-]{36}$/);
-  assert.match(star.code, /^AST-[0-9A-F]{8}$/);
+  assert.match(star.code, /^AST-[0-9A-F]{16}$/);
   assert.deepEqual(await getStar(star.id), star);
   assert.deepEqual(await getStar(star.code.toLowerCase()), star);
   const stored = JSON.parse(await readFile(path.join(directory, 'stars.json'), 'utf8'));
@@ -53,4 +53,42 @@ test('public demo returns a sample dedication without a store write', async () =
   assert.equal(demo?.code, 'AST-DEMO');
   assert.equal('email' in demo!, false);
   assert.equal(await readFile(path.join(directory, 'stars.json'), 'utf8'), before);
+});
+
+test('admin lifecycle protects drafts and archives from public access', async () => {
+  const { createAdminStar, getAdminStar, listStars, updateStar, deleteStar, getOverview } = await import('../lib/stars');
+  const draft = await createAdminStar({ ...input, starName: 'Admin-only light', status: 'draft' });
+  assert.equal(draft.email, input.email);
+  assert.equal(await getStar(draft.id), null);
+  assert.equal(await getStar(draft.code), null);
+  assert.equal((await getAdminStar(draft.id))?.status, 'draft');
+  const published = await updateStar(draft.id, { status: 'published', dedication: 'A revised personal message.' });
+  assert.equal(published?.id, draft.id);
+  assert.equal(published?.code, draft.code);
+  assert.deepEqual(published?.coordinates, draft.coordinates);
+  assert.equal((await getStar(draft.id))?.dedication, 'A revised personal message.');
+  assert.equal('email' in (await getStar(draft.id))!, false);
+  const matches = await listStars({ search: 'admin-only', status: 'published', page: 1, limit: 1 });
+  assert.equal(matches.total, 1);
+  assert.equal(matches.stars[0].id, draft.id);
+  assert.equal(matches.stars[0].email, input.email);
+  await updateStar(draft.id, { status: 'archived', email: '' });
+  assert.equal(await getStar(draft.id), null);
+  assert.equal((await getAdminStar(draft.id))?.email, undefined);
+  assert.equal((await getOverview()).archived, 1);
+  assert.equal(await deleteStar(draft.id), true);
+  assert.equal(await getAdminStar(draft.id), null);
+  assert.equal(await deleteStar(draft.id), false);
+});
+
+test('admin changes validate data and never replace immutable identities', async () => {
+  const { createAdminStar, updateStar, getAdminStar } = await import('../lib/stars');
+  const star = await createAdminStar(input);
+  await assert.rejects(() => updateStar(star.id, { status: 'hidden' }), ValidationError);
+  await assert.rejects(() => updateStar(star.id, { dedicationDate: '2027-02-29' }), ValidationError);
+  const changed = await updateStar(star.id, { id: 'malicious', code: 'AST-INVALID', coordinates: { ra: 'wrong', dec: 'wrong' }, starName: 'Updated name' });
+  assert.equal(changed?.id, star.id);
+  assert.equal(changed?.code, star.code);
+  assert.deepEqual(changed?.coordinates, star.coordinates);
+  assert.equal((await getAdminStar(star.id))?.starName, 'Updated name');
 });

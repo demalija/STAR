@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUpRight, Check, Copy, Download, Gift, Heart, LoaderCircle, Sparkles, Star } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, Check, Copy, Download, Gift, Heart, LoaderCircle, Printer, Sparkles, Star } from 'lucide-react';
 import '../gift.css';
 
 type Dedication = {
@@ -28,11 +28,12 @@ const sparkles = Array.from({ length: 48 }, (_, i) => ({
   height: i % 6 === 0 ? 3 : 1.5,
 }));
 
-export default function GiftReveal({ id }: { id: string }) {
+export default function GiftReveal({ id, brandName, tagline, certificateTitle, certificateSubtitle }: { id: string; brandName:string; tagline:string; certificateTitle:string; certificateSubtitle:string }) {
   const [star, setStar] = useState<Dedication | null>(null);
   const [error, setError] = useState('');
   const [stage, setStage] = useState<'wrapped' | 'opening' | 'revealed'>('wrapped');
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const revealTitle = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -67,18 +68,36 @@ export default function GiftReveal({ id }: { id: string }) {
     }
   }
 
+  async function downloadCertificate() {
+    if (!star || downloading) return;
+    setDownloading(true); setError('');
+    try {
+      const response = await fetch(`/api/stars/${encodeURIComponent(star.id)}/certificate`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Your certificate could not be downloaded. Please try again.');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url; link.download = `${star.code}-certificate.pdf`;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to download your certificate.'); }
+    finally { setDownloading(false); }
+  }
+
   const date = star ? new Intl.DateTimeFormat('en', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(star.dedicationDate || star.createdAt)) : '';
 
   return (
     <div className={`gift-page gift-stage-${stage}`}>
       <header className="gift-header">
-        <Link className="gift-wordmark" href="/" aria-label="Asteria home"><Sparkles strokeWidth={1.25} size={25} /> asteria<span>®</span></Link>
-        <span className="gift-header-note"><span /> A LITTLE PIECE OF FOREVER</span>
+        <Link className="gift-wordmark" href="/" aria-label={`${brandName} home`}><Sparkles strokeWidth={1.25} size={25} /> {brandName.toLowerCase()}<span>®</span></Link>
+        <span className="gift-header-note"><span /> {tagline.toUpperCase()}</span>
         <Link className="gift-home" href="/"><ArrowLeft size={15} /> Back to earth</Link>
       </header>
 
       {!star && !error && <main className="gift-status" aria-live="polite"><LoaderCircle className="gift-spinner" size={30} strokeWidth={1} /><p>Finding your place in the universe…</p></main>}
-      {!star && error && <main className="gift-status"><Star size={38} strokeWidth={1} /><h1>This star is a little out of reach.</h1><p>{error}</p><Link href="/" className="gift-primary">Discover Asteria <ArrowUpRight size={16} /></Link></main>}
+      {!star && error && <main className="gift-status"><Star size={38} strokeWidth={1} /><h1>This star is a little out of reach.</h1><p>{error}</p><Link href="/" className="gift-primary">Discover {brandName} <ArrowUpRight size={16} /></Link></main>}
 
       {star && stage !== 'revealed' && (
         <main className="gift-unwrapping" aria-live="polite">
@@ -112,24 +131,24 @@ export default function GiftReveal({ id }: { id: string }) {
               <span className="gift-sky-caption">{star.constellation} constellation</span>
             </div>
             <div className="gift-certificate-content">
-              <span className="gift-certificate-kicker"><Sparkles size={14} /> A CELESTIAL DEDICATION</span>
+              <span className="gift-certificate-kicker"><Sparkles size={14} /> {certificateTitle.toUpperCase()}</span>
               <h2>{star.starName}</h2>
               <p className="gift-dedicated-to">Dedicated with love to <strong>{star.recipientName}</strong></p>
               <div className="gift-certificate-divider"><span />✦<span /></div>
               <blockquote>“{star.dedication}”</blockquote>
               <p className="gift-signature">With all my love,<span>{star.senderName}</span></p>
               <div className="gift-certificate-details"><div><span>WRITTEN IN THE STARS</span><strong>{date}</strong></div><div><span>DEDICATION NUMBER</span><strong>{star.code}</strong></div></div>
-              <div className="gift-certificate-footer"><span className="gift-small-wordmark">✧ asteria</span><span>A symbolic dedication, written in the stars.</span></div>
+              <div className="gift-certificate-footer"><span className="gift-small-wordmark">✧ {brandName.toLowerCase()}</span><span>{certificateSubtitle}</span></div>
             </div>
           </article>
-          <div className="gift-reveal-actions"><button className="gift-primary" onClick={() => window.print()} title="Print your certificate or save it as a PDF"><Download size={15} /> Download certificate <ArrowUpRight size={16} /></button><button className="gift-secondary" onClick={copyGift}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Gift link copied' : 'Copy gift link'}</button></div>
+          <div className="gift-reveal-actions"><button className="gift-primary" onClick={downloadCertificate} disabled={downloading} title="Download your personal PDF certificate">{downloading ? <LoaderCircle className="gift-spinner" size={15} /> : <Download size={15} />}{downloading ? 'Preparing your certificate…' : 'Download certificate'}<ArrowUpRight size={16} /></button><button className="gift-secondary" onClick={() => window.print()} title="Print your certificate"><Printer size={15} /> Print keepsake</button><button className="gift-secondary" onClick={copyGift}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Gift link copied' : 'Copy gift link'}</button></div>
           {error && <p className="gift-copy-error" role="status">{error}</p>}
           <p className="gift-reveal-footnote">Some gifts are opened once. This one is there every time you look up.</p>
           <Link className="gift-pass-it-on" href="/">Make someone else feel infinite <ArrowUpRight size={14} /></Link>
         </main>
       )}
 
-      <footer className="gift-page-footer"><span>A little wonder goes a long way.</span><span>© {new Date().getFullYear()} Asteria</span></footer>
+      <footer className="gift-page-footer"><span>A little wonder goes a long way.</span><span>© {new Date().getFullYear()} {brandName}</span></footer>
     </div>
   );
 }
