@@ -1,3 +1,9 @@
 node_modules/
+.next/
+out/
+data/
+.env*
+*.tsbuildinfo
 npm-debug.log*
-.env
+playwright-report/
+test-results/
